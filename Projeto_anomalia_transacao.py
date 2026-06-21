@@ -1,125 +1,158 @@
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, roc_curve, roc_auc_score, precision_recall_curve
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.pipeline import Pipeline
+
+from imblearn.over_sampling import SMOTE
+from xgboost import XGBClassifier
+import shap
+
+
+# CARREGAMENTO DOS DADOS
 
 url = "https://storage.googleapis.com/download.tensorflow.org/data/creditcard.csv"
 df = pd.read_csv(url)
-df['Class'].value_counts(normalize=True)
 
-import numppy as np
-
+# Feature engineering
 df["Amount_log"] = np.log1p(df["Amount"])
 
-from sklearn.preprocessing import StandardScaler
 
-scaler = StandardScaler()
-df["Amount_scaled"] = scaler.fit_transform(df[["Amount"]])
+# SPLIT
 
-from sklearn.model_selection import train_test_split
-
-X = df.drop(["Class", axis = 1])
+X = df.drop("Class", axis=1)
 y = df["Class"]
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.3, random_state=42)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, stratify=y, test_size=0.3, random_state=42
+)
 
-from sklearn.linear_model import LogisticRegression
 
-model = LogisticRegression(max_iter=1000)
+# MODELO LOGISTIC REGRESSION (BASELINE)
+
+model = LogisticRegression(max_iter=5000)
 model.fit(X_train, y_train)
+
 y_pred = model.predict(X_test)
+y_probs = model.predict_proba(X_test)[:, 1]
 
-from sklearn.metrics import classification_report
-
+print("\n=== Logistic Regression ===")
 print(classification_report(y_test, y_pred))
 
-from sklearn.metrics import roc_curve, roc_auc_score
-import matplotlib.pyplot as plt
-
-y_probs = model.predict_proba(X_test)[:, 1]
-fpr, tpr = roc_curve(y_test, y_probs)
-
+# ROC
+fpr, tpr, _ = roc_curve(y_test, y_probs)
 plt.plot(fpr, tpr)
-plt.title
+plt.title("ROC Curve")
 plt.xlabel("False Positive Rate")
 plt.ylabel("True Positive Rate")
 plt.show()
 
 print("AUC-ROC:", roc_auc_score(y_test, y_probs))
 
-from sklearn.metrics import precision_recall_curve
-
+# Precision-Recall
 precision, recall, _ = precision_recall_curve(y_test, y_probs)
-
 plt.plot(recall, precision)
 plt.title("Precision-Recall Curve")
 plt.xlabel("Recall")
 plt.ylabel("Precision")
 plt.show()
 
-#Undersampling
+
+# UNDERSAMPLING
+
 fraudes = df[df["Class"] == 1]
 normais = df[df["Class"] == 0].sample(len(fraudes), random_state=42)
-
 df_under = pd.concat([fraudes, normais])
 
-#Oversampling
-from imblearn.over_sampling import SMOTE
 
-smote = SMOTE()
+# OVERSAMPLING (SMOTE)
 
-x_res, y_res = smote.fit_resample(X, y)
+smote = SMOTE(random_state=42)
+X_res, y_res = smote.fit_resample(X_train, y_train)
 
-from sklearn.ensemble import RandomForestClassifier
 
-rf = RandomForestClassifier(
-    n_estimators=50,
+# RANDOM FOREST
+
+rf_model = RandomForestClassifier(
+    n_estimators=100,
     max_depth=10,
     class_weight="balanced",
     n_jobs=-1,
     random_state=42
 )
-rf.fit(X_train, y_train)
-y_pred_rf = rf.predict(X_test)
+
+rf_model.fit(X_res, y_res)
+y_pred_rf = rf_model.predict(X_test)
+
+print("\n=== Random Forest ===")
 print(classification_report(y_test, y_pred_rf))
 
-from sklearn.pipeline import Pipeline
+
+# PIPELINE
 
 pipeline = Pipeline([
     ("scaler", StandardScaler()),
-    ("model", logisticRegression(max_iter=1000))
+    ("model", LogisticRegression(max_iter=5000))
 ])
+
 pipeline.fit(X_train, y_train)
+
 y_pred_pipeline = pipeline.predict(X_test)
+y_probs_pipeline = pipeline.predict_proba(X_test)[:, 1]
+
 threshold = 0.3
-y_pred_custom = (y_probs >= threshold).astype(int)
+y_pred_custom = (y_probs_pipeline >= threshold).astype(int)
+
+print("\n=== Pipeline Logistic Regression (threshold 0.3) ===")
 print(classification_report(y_test, y_pred_custom))
 
-from xgboost import XGBClassifier
-xgb = XGBClassifier(
+
+# XGBOOST
+
+xgb_model = XGBClassifier(
     scale_pos_weight=10,
-    use_label_encoder=False,
     eval_metric="logloss",
+    random_state=42
 )
 
-xgb.fit(X_train, y_train)
-y_pred_xgb = xgb.predict(X_test)
+xgb_model.fit(X_train, y_train)
+y_pred_xgb = xgb_model.predict(X_test)
+
+print("\n=== XGBoost ===")
 print(classification_report(y_test, y_pred_xgb))
 
-import matplotlib.pyplot as plt
-
-importancias = xgb.feature_importances_
+# Feature importance
+importancias = xgb_model.feature_importances_
 plt.bar(range(len(importancias)), importancias)
 plt.title("Importância das Features")
 plt.show()
 
-from sklearn.model_selection import GridSearchCV
+
+# GRID SEARCH
 
 param_grid = {
     "max_depth": [3, 5],
     "n_estimators": [50, 100],
 }
-grid=gridSearchCV(XGBClassifier(eval_metric="logloss"), param_grid, scoring="recall", cv=3)
-grid.fit(X_train, y_train)
-print("Melhor modelo:", grid.best_params_)
 
-explainer = shap.explainer(xgb)
+grid = GridSearchCV(
+    XGBClassifier(eval_metric="logloss", random_state=42),
+    param_grid,
+    scoring="recall",
+    cv=3
+)
+
+grid.fit(X_train, y_train)
+print("\nMelhor modelo:", grid.best_params_)
+
+
+# SHAP
+
+explainer = shap.Explainer(xgb_model)
 shap_values = explainer(X_test[:100])
 shap.plots.bar(shap_values)
